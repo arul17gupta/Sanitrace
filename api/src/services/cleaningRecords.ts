@@ -169,7 +169,7 @@ export async function amendCleaningRecord(
     // `updated_at` and writing a change set that reports no change.
     if (changes.length === 0) return before;
 
-    const updated = await updateRecord(client, recordId, {
+    await updateRecord(client, recordId, {
       cleanedBy: input.cleanedBy,
       cleanedAt: input.cleanedAt,
       methodId: input.methodId,
@@ -188,6 +188,11 @@ export async function amendCleaningRecord(
       changes,
     });
 
+    // Read back only now. verifiedBy and verifiedAt come out of the audit
+    // trail, so a read taken before the change set exists would report a
+    // just-verified record as unverified.
+    const updated = await findRecord(recordId, client);
+    if (updated === null) throw notFound('Cleaning record');
     return updated;
   });
 }

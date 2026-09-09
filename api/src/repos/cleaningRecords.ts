@@ -201,11 +201,18 @@ export interface UpdateRecordInput {
   status: CleaningStatus;
 }
 
+/**
+ * Applies the amendment and nothing else.
+ *
+ * Deliberately does not read the record back: `verifiedBy` and `verifiedAt` are
+ * derived from the audit trail, so the caller has to read after the change set
+ * is written or it would see the record as unverified.
+ */
 export async function updateRecord(
   client: Queryable,
   id: string,
   input: UpdateRecordInput,
-): Promise<CleaningRecord> {
+): Promise<void> {
   await client.query(
     `update cleaning_records
         set cleaned_by = coalesce($2::uuid, cleaned_by),
@@ -225,8 +232,4 @@ export async function updateRecord(
       input.status,
     ],
   );
-
-  const record = await findRecord(id, client);
-  if (record === null) throw new Error('Updated record could not be read back');
-  return record;
 }
