@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, api } from '../api/client';
 import type { AuditChangeSet } from '../api/types';
-import { fieldLabel, formatTimestamp, orDash } from '../format';
+import { auditTitle, auditValue, fieldLabel, formatTimestamp } from '../format';
 
 interface Props {
   recordId: string;
@@ -69,11 +69,17 @@ export function AuditTrail({ recordId }: Props): JSX.Element {
                 {changeSet.entries.map((entry) => (
                   <tr key={entry.id}>
                     <th scope="row">{fieldLabel(entry.field)}</th>
-                    <td className="old">{orDash(entry.oldValue)}</td>
+                    {/* title carries the exact stored string, so formatting a
+                        timestamp for display never hides what was recorded. */}
+                    <td className="old" title={auditTitle(entry.field, entry.oldValue)}>
+                      {auditValue(entry.field, entry.oldValue)}
+                    </td>
                     <td aria-hidden="true" className="arrow">
                       &rarr;
                     </td>
-                    <td className="new">{orDash(entry.newValue)}</td>
+                    <td className="new" title={auditTitle(entry.field, entry.newValue)}>
+                      {auditValue(entry.field, entry.newValue)}
+                    </td>
                   </tr>
                 ))}
               </tbody>

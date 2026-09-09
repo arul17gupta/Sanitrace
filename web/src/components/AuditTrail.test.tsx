@@ -102,6 +102,42 @@ describe('AuditTrail', () => {
     expect(within(row).getByText('SOP-CLN-014')).toBeInTheDocument();
   });
 
+  it('formats an audited timestamp but keeps the stored value on hover', async () => {
+    // The trail stores ISO, which is right to store and wrong to show next to
+    // the formatted dates everywhere else.
+    listAudit.mockResolvedValue(
+      page([
+        changeSet({
+          entries: [
+            { id: 1, field: 'cleanedAt', oldValue: null, newValue: '2026-09-09T20:25:19Z' },
+          ],
+        }),
+      ]),
+    );
+
+    render(<AuditTrail recordId="rec-1" />);
+
+    const row = await screen.findByRole('row', { name: /Cleaned at/ });
+    expect(within(row).queryByText('2026-09-09T20:25:19Z')).not.toBeInTheDocument();
+    expect(within(row).getByTitle('2026-09-09T20:25:19Z')).toBeInTheDocument();
+  });
+
+  it('does not reformat a notes value that happens to look like a date', async () => {
+    listAudit.mockResolvedValue(
+      page([
+        changeSet({
+          entries: [
+            { id: 1, field: 'notes', oldValue: null, newValue: 'Due 2026-09-09T20:25:19Z' },
+          ],
+        }),
+      ]),
+    );
+
+    render(<AuditTrail recordId="rec-1" />);
+
+    expect(await screen.findByText('Due 2026-09-09T20:25:19Z')).toBeInTheDocument();
+  });
+
   it('reports an empty history', async () => {
     listAudit.mockResolvedValue(page([]));
 
