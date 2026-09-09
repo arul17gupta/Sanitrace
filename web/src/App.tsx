@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { api, setCurrentUserId } from './api/client';
-import type { CleaningMethod, Equipment, User } from './api/types';
-import { UserPicker } from './components/UserPicker';
-import { EquipmentDetail } from './pages/EquipmentDetail';
-import { EquipmentList } from './pages/EquipmentList';
+import { api, setCurrentUserId } from '@/api/client';
+import type { CleaningMethod, Equipment, User } from '@/api/types';
+import { UserPicker } from '@/components/UserPicker';
+import { EquipmentDetail } from '@/pages/EquipmentDetail';
+import { EquipmentList } from '@/pages/EquipmentList';
 
 /**
  * Two screens, selected by state rather than by a router.
@@ -52,19 +52,27 @@ export function App(): JSX.Element {
   }
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div>
-          <h1>Sanitrace</h1>
-          <p className="tagline">Equipment cleaning log with a full audit trail</p>
+    <div className="min-h-svh bg-background text-foreground">
+      <header className="border-b">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-end justify-between gap-4 px-6 py-5">
+          <div>
+            <h1 className="font-heading text-xl font-semibold tracking-tight">Sanitrace</h1>
+            <p className="text-sm text-muted-foreground">
+              Equipment cleaning log with a full audit trail
+            </p>
+          </div>
+          {users.length > 0 && (
+            <UserPicker users={users} currentUserId={actorId} onChange={handleActorChange} />
+          )}
         </div>
-        {users.length > 0 && (
-          <UserPicker users={users} currentUserId={actorId} onChange={handleActorChange} />
-        )}
       </header>
 
-      <main>
-        {bootError !== null && <p className="error">{bootError}</p>}
+      <main className="mx-auto max-w-6xl px-6 py-8">
+        {bootError !== null && (
+          <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {bootError}
+          </p>
+        )}
 
         {bootError === null && selected === null && <EquipmentList onSelect={setSelected} />}
 

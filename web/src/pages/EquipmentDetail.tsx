@@ -1,15 +1,28 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ApiError, api } from '../api/client';
-import type {
-  CleaningMethod,
-  CleaningRecord,
-  CleaningStatus,
-  Equipment,
-  User,
-} from '../api/types';
-import { AuditTrail } from '../components/AuditTrail';
-import { CleaningRecordForm } from '../components/CleaningRecordForm';
-import { formatTimestamp, orDash } from '../format';
+import { ArrowLeftIcon } from 'lucide-react';
+import { ApiError, api } from '@/api/client';
+import type { CleaningMethod, CleaningRecord, CleaningStatus, Equipment, User } from '@/api/types';
+import { AuditTrail } from '@/components/AuditTrail';
+import { CleaningRecordForm } from '@/components/CleaningRecordForm';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { formatTimestamp, orDash } from '@/format';
 
 interface Props {
   equipment: Equipment;
@@ -20,9 +33,14 @@ interface Props {
 
 type FormState = { mode: 'closed' } | { mode: 'create' } | { mode: 'edit'; record: CleaningRecord };
 
+const ALL = 'all';
+
+// See UserPicker: Base UI needs a value -> label map to render a label.
+const STATUS_LABELS = { [ALL]: 'All', pending: 'Pending', verified: 'Verified' };
+
 export function EquipmentDetail({ equipment, users, methods, onBack }: Props): JSX.Element {
   const [records, setRecords] = useState<CleaningRecord[]>([]);
-  const [status, setStatus] = useState<CleaningStatus | ''>('');
+  const [status, setStatus] = useState<CleaningStatus | typeof ALL>(ALL);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -31,12 +49,12 @@ export function EquipmentDetail({ equipment, users, methods, onBack }: Props): J
   const [auditFor, setAuditFor] = useState<string | null>(null);
 
   const load = useCallback(
-    async (from: string | null, filter: CleaningStatus | '') => {
+    async (from: string | null, filter: CleaningStatus | typeof ALL) => {
       setLoading(true);
       setError(null);
       try {
         const page = await api.listRecords(equipment.id, {
-          ...(filter === '' ? {} : { status: filter }),
+          ...(filter === ALL ? {} : { status: filter }),
           cursor: from,
           limit: 10,
         });
@@ -64,38 +82,52 @@ export function EquipmentDetail({ equipment, users, methods, onBack }: Props): J
   };
 
   return (
-    <section>
-      <button type="button" className="link" onClick={onBack}>
-        &larr; All equipment
-      </button>
+    <section className="grid gap-4">
+      <div>
+        <Button variant="ghost" size="sm" onClick={onBack} className="-ml-2">
+          <ArrowLeftIcon /> All equipment
+        </Button>
+      </div>
 
-      <div className="toolbar">
-        <h2>
-          <code>{equipment.code}</code> {equipment.name}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <h2 className="flex items-baseline gap-2 font-heading text-lg font-semibold tracking-tight">
+          <span className="font-mono text-sm text-muted-foreground">{equipment.code}</span>
+          {equipment.name}
         </h2>
-        <label>
-          <span>Status</span>
-          <select
-            value={status}
-            onChange={(event) => setStatus(event.target.value as CleaningStatus | '')}
+
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="record-status" className="text-xs text-muted-foreground">
+              Status
+            </Label>
+            <Select
+              items={STATUS_LABELS}
+              value={status}
+              onValueChange={(value) => setStatus(value as CleaningStatus | typeof ALL)}
+            >
+              <SelectTrigger id="record-status" className="w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>{STATUS_LABELS[ALL]}</SelectItem>
+                <SelectItem value="pending">{STATUS_LABELS.pending}</SelectItem>
+                <SelectItem value="verified">{STATUS_LABELS.verified}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Button
+            onClick={() => setForm({ mode: 'create' })}
+            disabled={equipment.status === 'retired'}
+            title={
+              equipment.status === 'retired'
+                ? 'Retired equipment is out of service'
+                : 'Log a cleaning'
+            }
           >
-            <option value="">all</option>
-            <option value="pending">pending</option>
-            <option value="verified">verified</option>
-          </select>
-        </label>
-        <button
-          type="button"
-          onClick={() => setForm({ mode: 'create' })}
-          disabled={equipment.status === 'retired'}
-          title={
-            equipment.status === 'retired'
-              ? 'Retired equipment is out of service'
-              : 'Log a cleaning'
-          }
-        >
-          Log a cleaning
-        </button>
+            Log a cleaning
+          </Button>
+        </div>
       </div>
 
       {form.mode === 'create' && (
@@ -119,65 +151,77 @@ export function EquipmentDetail({ equipment, users, methods, onBack }: Props): J
         />
       )}
 
-      {error !== null && <p className="error">{error}</p>}
+      {error !== null && (
+        <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {error}
+        </p>
+      )}
 
-      <table className="table">
-        <thead>
-          <tr>
-            <th scope="col">Cleaned at</th>
-            <th scope="col">Cleaned by</th>
-            <th scope="col">Method</th>
-            <th scope="col">Notes</th>
-            <th scope="col">Status</th>
-            <th scope="col">Verified by</th>
-            <th scope="col" />
-          </tr>
-        </thead>
-        <tbody>
-          {records.map((record) => (
-            <tr key={record.id}>
-              <td>{formatTimestamp(record.cleanedAt)}</td>
-              <td>{record.cleanedByName}</td>
-              <td>
-                <code>{record.methodCode}</code>
-              </td>
-              <td className="notes">{orDash(record.notes)}</td>
-              <td>
-                <span className={`badge badge-${record.status}`}>{record.status}</span>
-              </td>
-              <td>{orDash(record.verifiedByName)}</td>
-              <td className="row-actions">
-                <button
-                  type="button"
-                  className="link"
-                  onClick={() => setForm({ mode: 'edit', record })}
-                >
-                  Amend
-                </button>
-                <button
-                  type="button"
-                  className="link"
-                  onClick={() => setAuditFor(auditFor === record.id ? null : record.id)}
-                >
-                  {auditFor === record.id ? 'Hide history' : 'History'}
-                </button>
-              </td>
-            </tr>
-          ))}
-          {records.length === 0 && !loading && (
-            <tr>
-              <td colSpan={7} className="muted">
-                No cleaning records for this filter.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Cleaned at</TableHead>
+              <TableHead>Cleaned by</TableHead>
+              <TableHead>Method</TableHead>
+              <TableHead>Notes</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Verified by</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {records.map((record) => (
+              <TableRow key={record.id}>
+                <TableCell className="whitespace-nowrap">
+                  {formatTimestamp(record.cleanedAt)}
+                </TableCell>
+                <TableCell>{record.cleanedByName}</TableCell>
+                <TableCell className="font-mono text-xs">{record.methodCode}</TableCell>
+                <TableCell className="max-w-64 text-muted-foreground">
+                  {orDash(record.notes)}
+                </TableCell>
+                <TableCell>
+                  <Badge variant={record.status === 'verified' ? 'secondary' : 'outline'}>
+                    {record.status}
+                  </Badge>
+                </TableCell>
+                <TableCell>{orDash(record.verifiedByName)}</TableCell>
+                <TableCell className="space-x-1 text-right whitespace-nowrap">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setForm({ mode: 'edit', record })}
+                  >
+                    Amend
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setAuditFor(auditFor === record.id ? null : record.id)}
+                  >
+                    {auditFor === record.id ? 'Hide history' : 'History'}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+            {records.length === 0 && !loading && (
+              <TableRow>
+                <TableCell colSpan={7} className="text-center text-muted-foreground">
+                  No cleaning records for this filter.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
 
       {hasMore && (
-        <button type="button" onClick={() => void load(cursor, status)} disabled={loading}>
-          {loading ? 'Loading…' : 'Load more'}
-        </button>
+        <div>
+          <Button variant="outline" onClick={() => void load(cursor, status)} disabled={loading}>
+            {loading ? 'Loading…' : 'Load more'}
+          </Button>
+        </div>
       )}
 
       {auditFor !== null && <AuditTrail recordId={auditFor} />}

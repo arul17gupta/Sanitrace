@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ApiError, api } from '../api/client';
-import type { AuditChangeSet } from '../api/types';
-import { auditTitle, auditValue, fieldLabel, formatTimestamp } from '../format';
+import { ApiError, api } from '@/api/client';
+import type { AuditChangeSet } from '@/api/types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableRow } from '@/components/ui/table';
+import { auditTitle, auditValue, fieldLabel, formatTimestamp } from '@/format';
 
 interface Props {
   recordId: string;
@@ -13,6 +17,9 @@ interface Props {
  * Grouped by change set rather than by timestamp: the API tells us which field
  * changes belong to the same edit, so the UI does not have to guess from the
  * clock. Each group is one thing a person did, with the reason they gave.
+ *
+ * The groups stay a real <ol>/<li> list -- it is a list of edits, and keeping
+ * the semantics means the structure is navigable rather than a stack of divs.
  */
 export function AuditTrail({ recordId }: Props): JSX.Element {
   const [changeSets, setChangeSets] = useState<AuditChangeSet[]>([]);
@@ -44,54 +51,79 @@ export function AuditTrail({ recordId }: Props): JSX.Element {
   }, [load]);
 
   return (
-    <section className="audit" aria-label="Audit trail">
-      <h3>Audit trail</h3>
+    <section className="mt-8 grid gap-4" aria-label="Audit trail">
+      <h3 className="font-heading text-base font-semibold tracking-tight">Audit trail</h3>
 
-      {error !== null && <p className="error">{error}</p>}
-
-      {changeSets.length === 0 && !loading && error === null && (
-        <p className="muted">No history for this record.</p>
+      {error !== null && (
+        <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {error}
+        </p>
       )}
 
-      <ol className="audit-list">
+      {changeSets.length === 0 && !loading && error === null && (
+        <p className="text-sm text-muted-foreground">No history for this record.</p>
+      )}
+
+      <ol className="grid gap-3">
         {changeSets.map((changeSet) => (
-          <li key={changeSet.id} className="audit-change-set">
-            <header>
-              <span className={`badge badge-${changeSet.action}`}>{changeSet.action}</span>
-              <strong>{changeSet.changedByName}</strong>
-              <time dateTime={changeSet.changedAt}>{formatTimestamp(changeSet.changedAt)}</time>
-            </header>
+          <li key={changeSet.id}>
+            <Card className="gap-0 py-4">
+              <CardHeader className="gap-1 px-4">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <Badge variant={changeSet.action === 'create' ? 'secondary' : 'outline'}>
+                    {changeSet.action}
+                  </Badge>
+                  <span className="font-medium">{changeSet.changedByName}</span>
+                  <time dateTime={changeSet.changedAt} className="text-muted-foreground">
+                    {formatTimestamp(changeSet.changedAt)}
+                  </time>
+                </div>
+                {changeSet.reason !== null && (
+                  <p className="text-sm text-muted-foreground italic">{changeSet.reason}</p>
+                )}
+              </CardHeader>
 
-            {changeSet.reason !== null && <p className="audit-reason">{changeSet.reason}</p>}
-
-            <table className="audit-fields">
-              <tbody>
-                {changeSet.entries.map((entry) => (
-                  <tr key={entry.id}>
-                    <th scope="row">{fieldLabel(entry.field)}</th>
-                    {/* title carries the exact stored string, so formatting a
-                        timestamp for display never hides what was recorded. */}
-                    <td className="old" title={auditTitle(entry.field, entry.oldValue)}>
-                      {auditValue(entry.field, entry.oldValue)}
-                    </td>
-                    <td aria-hidden="true" className="arrow">
-                      &rarr;
-                    </td>
-                    <td className="new" title={auditTitle(entry.field, entry.newValue)}>
-                      {auditValue(entry.field, entry.newValue)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              <CardContent className="px-4 pt-2">
+                <Table className="text-sm">
+                  <TableBody>
+                    {changeSet.entries.map((entry) => (
+                      <TableRow key={entry.id} className="border-0 hover:bg-transparent">
+                        <TableHead className="h-auto w-36 py-1 align-top font-normal text-muted-foreground">
+                          {fieldLabel(entry.field)}
+                        </TableHead>
+                        {/* title carries the exact stored string, so formatting a
+                            timestamp for display never hides what was recorded. */}
+                        <TableCell
+                          className="py-1 align-top text-destructive line-through"
+                          title={auditTitle(entry.field, entry.oldValue)}
+                        >
+                          {auditValue(entry.field, entry.oldValue)}
+                        </TableCell>
+                        <TableCell aria-hidden="true" className="w-6 py-1 text-center align-top text-muted-foreground">
+                          &rarr;
+                        </TableCell>
+                        <TableCell
+                          className="py-1 align-top font-medium"
+                          title={auditTitle(entry.field, entry.newValue)}
+                        >
+                          {auditValue(entry.field, entry.newValue)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
           </li>
         ))}
       </ol>
 
       {hasMore && (
-        <button type="button" onClick={() => void load(cursor)} disabled={loading}>
-          {loading ? 'Loading…' : 'Load older history'}
-        </button>
+        <div>
+          <Button variant="outline" size="sm" onClick={() => void load(cursor)} disabled={loading}>
+            {loading ? 'Loading…' : 'Load older history'}
+          </Button>
+        </div>
       )}
     </section>
   );
