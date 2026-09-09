@@ -1,0 +1,22 @@
+{
+  "name": "sanitrace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Equipment Cleaning Log with a full field-level audit trail",
+  "workspaces": [
+    "api",
+    "web"
+  ],
+  "scripts": {
+    "db:setup": "npm -w api run db:setup",
+    "dev:api": "npm -w api run dev",
+    "dev:web": "npm -w web run dev",
+    "test": "npm -w api run test && npm -w web run test",
+    "test:api": "npm -w api run test",
+    "test:web": "npm -w web run test",
+    "typecheck": "npm -w api run typecheck && npm -w web run typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
