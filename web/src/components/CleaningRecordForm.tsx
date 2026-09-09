@@ -1,7 +1,29 @@
-import { useMemo, useState } from 'react';
-import { ApiError, api } from '../api/client';
-import type { CleaningMethod, CleaningRecord, CleaningStatus, User } from '../api/types';
-import { isoToLocalInput, localInputToIso } from '../format';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { ApiError, api } from '@/api/client';
+import type { CleaningMethod, CleaningRecord, CleaningStatus, User } from '@/api/types';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
+import { isoToLocalInput, localInputToIso } from '@/format';
 
 interface Props {
   equipmentId: string;
@@ -16,6 +38,43 @@ interface Props {
 /** Fields whose change withdraws an existing verification (mirrors the API). */
 const SUBSTANTIVE = ['cleanedBy', 'cleanedAt', 'methodId'] as const;
 
+const userLabel = (user: User): string => `${user.name} — ${user.role}`;
+const methodLabel = (method: CleaningMethod): string =>
+  `${method.code} — ${method.name} (v${method.version})`;
+
+// Base UI renders the raw value in the trigger unless given a
+// value -> label map; uuid-valued selects need one to show a name.
+const STATUS_LABELS = { pending: 'pending', verified: 'verified' };
+
+/**
+ * Client-side schema.
+ *
+ * These rules deliberately mirror the API's zod schema rather than replacing
+ * it: the server stays the authority, because a browser check is only a
+ * courtesy to whoever is typing. Duplicating the rules here is what turns a
+ * round trip into instant feedback -- and the two are small enough that a drift
+ * shows up in the integration tests.
+ */
+const recordSchema = z.object({
+  cleanedBy: z.string().uuid('Select who performed the cleaning'),
+  cleanedAt: z
+    .string()
+    .min(1, 'Enter when the cleaning finished')
+    .refine((value) => !Number.isNaN(Date.parse(value)), 'That is not a valid date and time')
+    // Contemporaneous recording: you cannot log a cleaning that has not
+    // happened yet. A minute of slack absorbs clock skew.
+    .refine(
+      (value) => Date.parse(value) <= Date.now() + 60_000,
+      'A cleaning cannot be recorded in the future',
+    ),
+  methodId: z.string().uuid('Select the procedure that was followed'),
+  notes: z.string().max(1000, 'Keep notes under 1000 characters'),
+  status: z.enum(['pending', 'verified']),
+  reason: z.string().max(500, 'Keep the reason under 500 characters'),
+});
+
+type RecordFormValues = z.infer<typeof recordSchema>;
+
 export function CleaningRecordForm({
   equipmentId,
   users,
@@ -26,17 +85,24 @@ export function CleaningRecordForm({
 }: Props): JSX.Element {
   const isEdit = record !== undefined;
 
-  const [cleanedBy, setCleanedBy] = useState(record?.cleanedBy ?? users[0]?.id ?? '');
-  const [cleanedAt, setCleanedAt] = useState(
-    isoToLocalInput(record?.cleanedAt ?? new Date().toISOString()),
-  );
-  const [methodId, setMethodId] = useState(record?.methodId ?? methods[0]?.id ?? '');
-  const [notes, setNotes] = useState(record?.notes ?? '');
-  const [status, setStatus] = useState<CleaningStatus>(record?.status ?? 'pending');
-  const [reason, setReason] = useState('');
+  const form = useForm<RecordFormValues>({
+    resolver: zodResolver(recordSchema),
+    defaultValues: {
+      cleanedBy: record?.cleanedBy ?? users[0]?.id ?? '',
+      cleanedAt: isoToLocalInput(record?.cleanedAt ?? new Date().toISOString()),
+      methodId: record?.methodId ?? methods[0]?.id ?? '',
+      notes: record?.notes ?? '',
+      status: record?.status ?? 'pending',
+      reason: '',
+    },
+  });
 
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<ApiError | Error | null>(null);
+  const values = form.watch();
+
+  const userItems = Object.fromEntries(users.map((user) => [user.id, userLabel(user)]));
+  const methodItems = Object.fromEntries(
+    methods.map((method) => [method.id, methodLabel(method)]),
+  );
 
   /**
    * Only the fields that actually changed are sent.
@@ -45,47 +111,53 @@ export function CleaningRecordForm({
    * API ignores keys it was not given, so sending the whole form back would
    * still be correct but would tell the reader less.
    */
-  const patch = useMemo(() => {
+  function buildPatch(input: RecordFormValues): Record<string, unknown> {
     if (record === undefined) return {};
     const changed: Record<string, unknown> = {};
-    if (cleanedBy !== record.cleanedBy) changed.cleanedBy = cleanedBy;
-    if (localInputToIso(cleanedAt) !== record.cleanedAt) {
-      changed.cleanedAt = localInputToIso(cleanedAt);
+    if (input.cleanedBy !== record.cleanedBy) changed.cleanedBy = input.cleanedBy;
+    if (localInputToIso(input.cleanedAt) !== record.cleanedAt) {
+      changed.cleanedAt = localInputToIso(input.cleanedAt);
     }
-    if (methodId !== record.methodId) changed.methodId = methodId;
-    const nextNotes = notes.trim() === '' ? null : notes.trim();
+    if (input.methodId !== record.methodId) changed.methodId = input.methodId;
+    const nextNotes = input.notes.trim() === '' ? null : input.notes.trim();
     if (nextNotes !== record.notes) changed.notes = nextNotes;
-    if (status !== record.status) changed.status = status;
+    if (input.status !== record.status) changed.status = input.status;
     return changed;
-  }, [record, cleanedBy, cleanedAt, methodId, notes, status]);
+  }
+
+  const pendingPatch = buildPatch(values);
 
   const willWithdrawVerification =
     isEdit &&
     record.status === 'verified' &&
-    status !== 'pending' &&
-    SUBSTANTIVE.some((field) => field in patch);
+    values.status !== 'pending' &&
+    SUBSTANTIVE.some((field) => field in pendingPatch);
 
-  const reasonRequired = isEdit && record.status === 'verified' && status === 'pending';
+  const reasonRequired = isEdit && record.status === 'verified' && values.status === 'pending';
 
-  const apiError = error instanceof ApiError ? error : null;
-
-  async function handleSubmit(event: React.FormEvent): Promise<void> {
-    event.preventDefault();
-    setSaving(true);
-    setError(null);
+  async function onSubmit(input: RecordFormValues): Promise<void> {
+    // The server enforces this too; asking here saves a round trip that can
+    // only fail.
+    if (reasonRequired && input.reason.trim() === '') {
+      form.setError('reason', {
+        message: 'A reason is required to withdraw a verification',
+      });
+      return;
+    }
 
     try {
       if (record === undefined) {
         const created = await api.createRecord(equipmentId, {
-          cleanedBy,
-          cleanedAt: localInputToIso(cleanedAt),
-          methodId,
-          notes: notes.trim() === '' ? null : notes.trim(),
+          cleanedBy: input.cleanedBy,
+          cleanedAt: localInputToIso(input.cleanedAt),
+          methodId: input.methodId,
+          notes: input.notes.trim() === '' ? null : input.notes.trim(),
         });
         onSaved(created);
         return;
       }
 
+      const patch = buildPatch(input);
       if (Object.keys(patch).length === 0) {
         onCancel();
         return;
@@ -93,117 +165,238 @@ export function CleaningRecordForm({
 
       const updated = await api.updateRecord(record.id, {
         ...patch,
-        ...(reason.trim() === '' ? {} : { reason: reason.trim() }),
+        ...(input.reason.trim() === '' ? {} : { reason: input.reason.trim() }),
       });
       onSaved(updated);
     } catch (caught) {
-      setError(caught instanceof Error ? caught : new Error('Save failed'));
-    } finally {
-      setSaving(false);
+      applyServerError(caught);
     }
   }
 
+  /** Maps the API's error codes onto the field they belong to. */
+  function applyServerError(caught: unknown): void {
+    if (!(caught instanceof ApiError)) {
+      form.setError('root', { message: 'Save failed. Please try again.' });
+      return;
+    }
+
+    if (caught.code === 'VALIDATION_FAILED' && caught.details !== undefined) {
+      for (const [field, messages] of Object.entries(caught.details)) {
+        const message = messages?.[0];
+        if (message !== undefined && field in recordSchema.shape) {
+          form.setError(field as keyof RecordFormValues, { message });
+        }
+      }
+      return;
+    }
+
+    if (caught.code === 'REASON_REQUIRED') {
+      form.setError('reason', { message: caught.message });
+      return;
+    }
+
+    if (caught.code === 'SELF_VERIFICATION_FORBIDDEN') {
+      form.setError('status', {
+        message:
+          'A cleaning cannot be verified by the person who performed it. Switch to another user to verify.',
+      });
+      return;
+    }
+
+    form.setError('root', { message: caught.message });
+  }
+
+  const rootError = form.formState.errors.root?.message;
+
   return (
-    <form className="card form" onSubmit={(event) => void handleSubmit(event)}>
-      <h3>{isEdit ? 'Amend cleaning record' : 'Log a cleaning'}</h3>
+    <Card className="mb-6">
+      <CardHeader>
+        <CardTitle className="text-base">
+          {isEdit ? 'Amend cleaning record' : 'Log a cleaning'}
+        </CardTitle>
+      </CardHeader>
 
-      <label>
-        <span>Cleaned by</span>
-        <select value={cleanedBy} onChange={(event) => setCleanedBy(event.target.value)} required>
-          {users.map((user) => (
-            <option key={user.id} value={user.id}>
-              {user.name} ({user.role})
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label>
-        <span>Cleaned at</span>
-        <input
-          type="datetime-local"
-          value={cleanedAt}
-          max={isoToLocalInput(new Date().toISOString())}
-          onChange={(event) => setCleanedAt(event.target.value)}
-          required
-        />
-        {apiError?.fieldError('cleanedAt') !== undefined && (
-          <em className="field-error">{apiError.fieldError('cleanedAt')}</em>
-        )}
-      </label>
-
-      <label>
-        <span>Method</span>
-        <select value={methodId} onChange={(event) => setMethodId(event.target.value)} required>
-          {methods.map((method) => (
-            <option key={method.id} value={method.id}>
-              {method.code} — {method.name} (v{method.version})
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label>
-        <span>Notes</span>
-        <textarea
-          value={notes}
-          maxLength={1000}
-          rows={3}
-          placeholder="Visual inspection passed, no visible residue."
-          onChange={(event) => setNotes(event.target.value)}
-        />
-      </label>
-
-      {isEdit && (
-        <label>
-          <span>Status</span>
-          <select
-            value={status}
-            onChange={(event) => setStatus(event.target.value as CleaningStatus)}
+      <CardContent>
+        <Form {...form}>
+          <form
+            onSubmit={form.handleSubmit(onSubmit)}
+            className="grid gap-5 md:max-w-2xl"
+            noValidate
           >
-            <option value="pending">pending</option>
-            <option value="verified">verified</option>
-          </select>
-        </label>
-      )}
+            <div className="grid gap-5 sm:grid-cols-2">
+              <FormField
+                control={form.control}
+                name="cleanedBy"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Cleaned by</FormLabel>
+                    <Select items={userItems} value={field.value} onValueChange={field.onChange}>
+                      <FormControl>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select a person" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {users.map((user) => (
+                          <SelectItem key={user.id} value={user.id}>
+                            {userLabel(user)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-      {willWithdrawVerification && (
-        <p className="warning">
-          This record is verified. Amending what was cleaned, when, or by whom withdraws the
-          sign-off and returns the record to <strong>pending</strong>.
-        </p>
-      )}
+              <FormField
+                control={form.control}
+                name="cleanedAt"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Cleaned at</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="datetime-local"
+                        max={isoToLocalInput(new Date().toISOString())}
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
 
-      {(reasonRequired || apiError?.code === 'REASON_REQUIRED') && (
-        <label>
-          <span>Reason for change</span>
-          <input
-            type="text"
-            value={reason}
-            maxLength={500}
-            placeholder="Swab result came back out of specification."
-            onChange={(event) => setReason(event.target.value)}
-            required
-          />
-        </label>
-      )}
+            <FormField
+              control={form.control}
+              name="methodId"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Method</FormLabel>
+                  <Select items={methodItems} value={field.value} onValueChange={field.onChange}>
+                    <FormControl>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select a procedure" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {methods.map((method) => (
+                        <SelectItem key={method.id} value={method.id}>
+                          {methodLabel(method)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    Only approved, current procedures are listed.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-      {error !== null && (
-        <p className="error">
-          {apiError?.code === 'SELF_VERIFICATION_FORBIDDEN'
-            ? 'A cleaning cannot be verified by the person who performed it. Switch to another user to verify.'
-            : error.message}
-        </p>
-      )}
+            <FormField
+              control={form.control}
+              name="notes"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Notes</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      rows={3}
+                      placeholder="Visual inspection passed, no visible residue."
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-      <div className="actions">
-        <button type="submit" disabled={saving}>
-          {saving ? 'Saving…' : isEdit ? 'Save amendment' : 'Log cleaning'}
-        </button>
-        <button type="button" className="secondary" onClick={onCancel} disabled={saving}>
-          Cancel
-        </button>
-      </div>
-    </form>
+            {isEdit && (
+              <FormField
+                control={form.control}
+                name="status"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Status</FormLabel>
+                    <Select
+                      items={STATUS_LABELS}
+                      value={field.value}
+                      onValueChange={(value) => field.onChange(value as CleaningStatus)}
+                    >
+                      <FormControl>
+                        <SelectTrigger className="w-48">
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="pending">pending</SelectItem>
+                        <SelectItem value="verified">verified</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
+
+            {willWithdrawVerification && (
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+                This record is verified. Amending what was cleaned, when, or by whom withdraws
+                the sign-off and returns the record to <strong>pending</strong>.
+              </p>
+            )}
+
+            {(reasonRequired || form.formState.errors.reason !== undefined) && (
+              <FormField
+                control={form.control}
+                name="reason"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Reason for change</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="Swab result came back out of specification."
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Withdrawing a verification is recorded in the audit trail with this reason.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
+
+            {rootError !== undefined && (
+              <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {rootError}
+              </p>
+            )}
+
+            <div className="flex gap-2">
+              <Button type="submit" disabled={form.formState.isSubmitting}>
+                {form.formState.isSubmitting
+                  ? 'Saving…'
+                  : isEdit
+                    ? 'Save amendment'
+                    : 'Log cleaning'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onCancel}
+                disabled={form.formState.isSubmitting}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </Form>
+      </CardContent>
+    </Card>
   );
 }
