@@ -8,8 +8,8 @@ record has to be traceable for a regulatory audit — who changed it, when, and
 what the value was before. That audit trail is the centre of this project.
 
 - **Database** — PostgreSQL, plain SQL schema and seed
-- **API** — Node + TypeScript + Express, raw parameterized SQL via `pg`
-- **Front-end** — React + TypeScript (Vite)
+- **API** — Node + TypeScript + Express, raw parameterized SQL via `pg`, zod at the boundary
+- **Front-end** — React + TypeScript (Vite), shadcn/ui + Tailwind, react-hook-form + zod
 
 Design decisions and trade-offs are in [NOTES.md](NOTES.md).
 
