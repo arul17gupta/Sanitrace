@@ -68,7 +68,7 @@ equipmentRecordsRouter.get(
       equipmentId,
       status: statusFilter.parse(req.query.status ?? undefined),
       limit: parseLimit(req.query.limit),
-      cursor: rawCursor === undefined ? undefined : decodeCursor(rawCursor),
+      cursor: rawCursor === undefined ? undefined : decodeCursor(rawCursor, 'timestamp'),
     });
 
     res.json(page);
@@ -145,7 +145,7 @@ cleaningRecordsRouter.get(
     const page = await listAuditHistory({
       recordId: id,
       limit: parseLimit(req.query.limit),
-      cursor: rawCursor === undefined ? undefined : decodeCursor(rawCursor),
+      cursor: rawCursor === undefined ? undefined : decodeCursor(rawCursor, 'timestamp'),
     });
 
     res.json(page);

@@ -44,7 +44,7 @@ equipmentRouter.get(
     const page = await listEquipment({
       status,
       limit: parseLimit(req.query.limit),
-      cursor: rawCursor === undefined ? undefined : decodeCursor(rawCursor),
+      cursor: rawCursor === undefined ? undefined : decodeCursor(rawCursor, 'text'),
     });
 
     res.json(page);

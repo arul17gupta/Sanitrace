@@ -81,8 +81,16 @@ create table cleaning_records (
 
     -- Contemporaneous recording (the "C" in ALCOA): you cannot record a
     -- cleaning that has not happened yet.
+    --
+    -- Compared against updated_at, not created_at. created_at is frozen at
+    -- insert, so comparing to it would reject a legitimate later correction:
+    -- a record written last week could never have its cleaning time amended to
+    -- yesterday, even though yesterday is firmly in the past. updated_at is
+    -- set to now() on every write, so the invariant this expresses is
+    -- "a cleaning time may not be in the future as of when the row was last
+    -- written" -- which is the rule actually intended.
     constraint cleaning_records_not_future
-        check (cleaned_at <= created_at + interval '1 minute')
+        check (cleaned_at <= updated_at + interval '1 minute')
 );
 
 -- Serves the keyset page exactly:
