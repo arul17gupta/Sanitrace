@@ -166,8 +166,23 @@ export function EquipmentDetail({ equipment, users, methods, onBack }: Props): J
                 </TableCell>
                 <TableCell>{record.cleanedByName}</TableCell>
                 <TableCell className="font-mono text-xs">{record.methodCode}</TableCell>
-                <TableCell className="max-w-64 text-muted-foreground">
-                  {orDash(record.notes)}
+                {/* Notes are free text, so this column needs two overrides that
+                    the other columns do not.
+
+                    `whitespace-normal` undoes the `whitespace-nowrap` in
+                    shadcn's TableCell -- a good default for dates and badges,
+                    but it stopped a long note wrapping, so it ran as one line
+                    over the Status column. And the width limit sits on a child
+                    because `max-width` on a <td> is ignored by the automatic
+                    table layout. Clamped to two lines to keep rows scannable,
+                    with the whole note on hover. */}
+                <TableCell className="align-top text-muted-foreground">
+                  <div
+                    className="line-clamp-2 max-w-72 whitespace-normal break-words"
+                    title={record.notes ?? undefined}
+                  >
+                    {orDash(record.notes)}
+                  </div>
                 </TableCell>
                 <TableCell>
                   <Badge variant={record.status === 'verified' ? 'secondary' : 'outline'}>

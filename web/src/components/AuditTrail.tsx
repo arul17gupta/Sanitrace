@@ -62,7 +62,7 @@ export function AuditTrail({ recordId }: Props): JSX.Element {
                 )}
               </CardHeader>
 
-              <CardContent className="px-4 pt-2">
+              <CardContent className="overflow-x-auto px-4 pt-2">
                 <Table className="text-sm">
                   <TableBody>
                     {changeSet.entries.map((entry) => (
@@ -70,13 +70,20 @@ export function AuditTrail({ recordId }: Props): JSX.Element {
                         <TableHead className="h-auto w-36 py-1 align-top font-normal text-muted-foreground">
                           {fieldLabel(entry.field)}
                         </TableHead>
-                        {/* title carries the exact stored string, so formatting a
-                            timestamp for display never hides what was recorded. */}
+                        {/* `title` carries the exact stored string, so formatting a
+                            timestamp for display never hides what was recorded.
+
+                            The width limit sits on a block child rather than the
+                            cell, because `max-width` on a <td> is ignored by the
+                            automatic table layout. Wrapped rather than clamped --
+                            an inspector has to be able to read the whole value. */}
                         <TableCell
                           className="py-1 align-top text-destructive line-through"
                           title={auditTitle(entry.field, entry.oldValue)}
                         >
-                          {auditValue(entry.field, entry.oldValue)}
+                          <span className="block max-w-80 whitespace-normal break-words">
+                            {auditValue(entry.field, entry.oldValue)}
+                          </span>
                         </TableCell>
                         <TableCell aria-hidden="true" className="w-6 py-1 text-center align-top text-muted-foreground">
                           &rarr;
@@ -85,7 +92,9 @@ export function AuditTrail({ recordId }: Props): JSX.Element {
                           className="py-1 align-top font-medium"
                           title={auditTitle(entry.field, entry.newValue)}
                         >
-                          {auditValue(entry.field, entry.newValue)}
+                          <span className="block max-w-80 whitespace-normal break-words">
+                            {auditValue(entry.field, entry.newValue)}
+                          </span>
                         </TableCell>
                       </TableRow>
                     ))}
