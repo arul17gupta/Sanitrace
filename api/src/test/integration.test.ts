@@ -410,6 +410,216 @@ describe('keyset pagination', () => {
   });
 });
 
+describe('equipment CRUD', () => {
+  /**
+   * The brief lists CRUD for equipment as a core requirement, so it gets
+   * covered directly rather than only incidentally via the records it owns.
+   */
+  it('creates, reads, updates and retires a piece of equipment', async () => {
+    const created = (
+      await request(app)
+        .post('/api/equipment')
+        .set(asUser(supervisor))
+        .send({ name: 'Coating Pan 2', code: 'cp-002' })
+        .expect(201)
+    ).body as Equipment;
+
+    // Asset tags are uppercased so 'cp-002' and 'CP-002' cannot become two
+    // different machines.
+    expect(created.code).toBe('CP-002');
+    expect(created.status).toBe('active');
+
+    const fetched = (await request(app).get(`/api/equipment/${created.id}`).expect(200))
+      .body as Equipment;
+    expect(fetched.id).toBe(created.id);
+
+    const renamed = (
+      await request(app)
+        .patch(`/api/equipment/${created.id}`)
+        .set(asUser(supervisor))
+        .send({ name: 'Coating Pan II' })
+        .expect(200)
+    ).body as Equipment;
+    expect(renamed.name).toBe('Coating Pan II');
+    expect(renamed.code).toBe('CP-002'); // untouched fields survive a partial update
+
+    // DELETE retires rather than removes: the cleaning history has to outlive
+    // the machine.
+    const retired = (
+      await request(app)
+        .delete(`/api/equipment/${created.id}`)
+        .set(asUser(supervisor))
+        .expect(200)
+    ).body as Equipment;
+    expect(retired.status).toBe('retired');
+
+    expect((await request(app).get(`/api/equipment/${created.id}`).expect(200)).body).toMatchObject(
+      { status: 'retired' },
+    );
+  });
+
+  it('refuses a duplicate asset tag and names the field', async () => {
+    const response = await request(app)
+      .post('/api/equipment')
+      .set(asUser(supervisor))
+      .send({ name: 'Clashing tag', code: 'MT-003' })
+      .expect(409);
+
+    expect(response.body.error.code).toBe('DUPLICATE_VALUE');
+    // The constraint name is an implementation detail; the response names the
+    // field so a form can show the error inline.
+    expect(response.body.error.message).not.toMatch(/equipment_code_key/);
+    expect(response.body.error.details?.code).toBeDefined();
+  });
+
+  it('refuses a write with no identified user', async () => {
+    await request(app).post('/api/equipment').send({ name: 'No actor', code: 'NA-001' }).expect(401);
+  });
+
+  it('404s for an unknown id and 400s for a malformed one', async () => {
+    await request(app)
+      .get('/api/equipment/11111111-1111-4111-8111-111111111111')
+      .expect(404);
+    await request(app).get('/api/equipment/not-a-uuid').expect(400);
+  });
+
+  it('filters by status', async () => {
+    const retired = (await request(app).get('/api/equipment?status=retired').expect(200)).body
+      .data as Equipment[];
+    expect(retired.length).toBeGreaterThan(0);
+    expect(retired.every((item) => item.status === 'retired')).toBe(true);
+  });
+
+  it('pages by asset tag and yields every row exactly once', async () => {
+    const all = (await request(app).get('/api/equipment?limit=100').expect(200)).body
+      .data as Equipment[];
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const url = `/api/equipment?limit=2${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`;
+      const page = (await request(app).get(url).expect(200)).body as {
+        data: Equipment[];
+        nextCursor: string | null;
+      };
+      seen.push(...page.data.map((item) => item.code));
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+
+    expect(seen).toEqual([...all.map((item) => item.code)]);
+    expect(seen).toHaveLength(new Set(seen).size);
+  });
+});
+
+describe('cursors are validated against the collection they are used on', () => {
+  it('rejects an equipment cursor used on a cleaning log', async () => {
+    // Regression: this used to reach Postgres, fail the ::timestamptz cast and
+    // come back as a 500.
+    const equipmentPage = (await request(app).get('/api/equipment?limit=1').expect(200)).body as {
+      nextCursor: string | null;
+    };
+    const cursor = equipmentPage.nextCursor as string;
+    expect(cursor).not.toBeNull();
+
+    const response = await request(app)
+      .get(`/api/equipment/${equipment.id}/cleaning-records?cursor=${encodeURIComponent(cursor)}`)
+      .expect(400);
+
+    expect(response.body.error.code).toBe('INVALID_CURSOR');
+  });
+
+  it('rejects a hand-made cursor whose id is not a uuid', async () => {
+    const forged = Buffer.from(
+      JSON.stringify({ sortValue: '2026-09-01T00:00:00.000Z', id: 'not-a-uuid' }),
+      'utf8',
+    ).toString('base64url');
+
+    await request(app)
+      .get(`/api/equipment/${equipment.id}/cleaning-records?cursor=${forged}`)
+      .expect(400);
+    await request(app)
+      .get(`/api/cleaning-records/${(await createRecord().expect(201)).body.id}/audit?cursor=${forged}`)
+      .expect(400);
+  });
+});
+
+describe('malformed requests get a useful answer, not a 500', () => {
+  it('reports malformed JSON as a bad request', async () => {
+    const response = await request(app)
+      .patch(`/api/cleaning-records/${(await createRecord().expect(201)).body.id}`)
+      .set(asUser(supervisor))
+      .set('Content-Type', 'application/json')
+      .send('{"notes": "unterminated')
+      .expect(400);
+
+    expect(response.body.error.code).toBe('MALFORMED_JSON');
+  });
+
+  it('reports a body over the size limit as 413', async () => {
+    const response = await request(app)
+      .patch(`/api/cleaning-records/${(await createRecord().expect(201)).body.id}`)
+      .set(asUser(supervisor))
+      .send({ notes: 'x'.repeat(70_000) })
+      .expect(413);
+
+    expect(response.body.error.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
+  it('explains an empty patch instead of returning an empty details object', async () => {
+    // An object-level `.refine` has no field to attach to, so it lands in
+    // formErrors. Reporting only fieldErrors used to swallow the message.
+    const response = await request(app)
+      .patch(`/api/cleaning-records/${(await createRecord().expect(201)).body.id}`)
+      .set(asUser(supervisor))
+      .send({})
+      .expect(400);
+
+    expect(response.body.error.message).toMatch(/at least one field/i);
+    expect(response.body.error.details._form).toContain('Provide at least one field to update');
+  });
+});
+
+describe('amending a cleaning time on an older record', () => {
+  /**
+   * Regression. The not-in-the-future check used to compare cleaned_at against
+   * created_at, which is frozen at insert -- so a record written days ago could
+   * never have its cleaning time corrected to yesterday, even though yesterday
+   * is firmly in the past. It failed as a 500 from a check-constraint
+   * violation. The constraint now compares against updated_at.
+   */
+  it('accepts a correction to any past time', async () => {
+    const oldest = (
+      await request(app)
+        .get(`/api/equipment/${equipment.id}/cleaning-records?limit=100`)
+        .expect(200)
+    ).body.data as CleaningRecord[];
+
+    const target = oldest[oldest.length - 1] as CleaningRecord;
+    // Seeded records are days old, so this is well after their created_at.
+    expect(Date.parse(target.createdAt)).toBeLessThan(Date.now() - 24 * 3600_000);
+
+    const corrected = (
+      await request(app)
+        .patch(`/api/cleaning-records/${target.id}`)
+        .set(asUser(supervisor))
+        .send({ cleanedAt: minutesAgo(5), reason: 'Time transcribed incorrectly from the log.' })
+        .expect(200)
+    ).body as CleaningRecord;
+
+    expect(Date.parse(corrected.cleanedAt)).toBeGreaterThan(Date.parse(target.createdAt));
+
+    const latest = (await auditOf(target.id))[0] as AuditChangeSet;
+    expect(latest.entries.some((entry) => entry.field === 'cleanedAt')).toBe(true);
+  });
+
+  it('still refuses a future time', async () => {
+    const response = await createRecord({
+      cleanedAt: new Date(Date.now() + 3600_000).toISOString(),
+    }).expect(400);
+    expect(response.body.error.code).toBe('VALIDATION_FAILED');
+  });
+});
+
 describe('the audit trail is append-only', () => {
   /**
    * 21 CFR Part 11 requires that the trail cannot be edited or deleted. These
