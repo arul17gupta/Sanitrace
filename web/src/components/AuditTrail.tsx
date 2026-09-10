@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ApiError, api } from '@/api/client';
-import type { AuditChangeSet } from '@/api/types';
+import { useCallback } from 'react';
+import { api } from '@/api/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableRow } from '@/components/ui/table';
 import { auditTitle, auditValue, fieldLabel, formatTimestamp } from '@/format';
+import { usePaginatedList } from '@/hooks/usePaginatedList';
 
 interface Props {
   recordId: string;
@@ -22,50 +22,29 @@ interface Props {
  * the semantics means the structure is navigable rather than a stack of divs.
  */
 export function AuditTrail({ recordId }: Props): JSX.Element {
-  const [changeSets, setChangeSets] = useState<AuditChangeSet[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(
-    async (from: string | null) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const page = await api.listAudit(recordId, { cursor: from, limit: 10 });
-        setChangeSets((existing) => (from === null ? page.data : [...existing, ...page.data]));
-        setCursor(page.nextCursor);
-        setHasMore(page.hasMore);
-      } catch (caught) {
-        setError(caught instanceof ApiError ? caught.message : 'Could not load the audit trail');
-      } finally {
-        setLoading(false);
-      }
-    },
+  const loadPage = useCallback(
+    (cursor: string | null) => api.listAudit(recordId, { cursor, limit: 10 }),
     [recordId],
   );
 
-  useEffect(() => {
-    void load(null);
-  }, [load]);
+  const history = usePaginatedList(loadPage, 'Could not load the audit trail');
 
   return (
     <section className="mt-8 grid gap-4" aria-label="Audit trail">
       <h3 className="font-heading text-base font-semibold tracking-tight">Audit trail</h3>
 
-      {error !== null && (
+      {history.error !== null && (
         <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {error}
+          {history.error}
         </p>
       )}
 
-      {changeSets.length === 0 && !loading && error === null && (
+      {history.items.length === 0 && !history.loading && history.error === null && (
         <p className="text-sm text-muted-foreground">No history for this record.</p>
       )}
 
       <ol className="grid gap-3">
-        {changeSets.map((changeSet) => (
+        {history.items.map((changeSet) => (
           <li key={changeSet.id}>
             <Card className="gap-0 py-4">
               <CardHeader className="gap-1 px-4">
@@ -118,10 +97,10 @@ export function AuditTrail({ recordId }: Props): JSX.Element {
         ))}
       </ol>
 
-      {hasMore && (
+      {history.hasMore && (
         <div>
-          <Button variant="outline" size="sm" onClick={() => void load(cursor)} disabled={loading}>
-            {loading ? 'Loading…' : 'Load older history'}
+          <Button variant="outline" size="sm" onClick={history.loadMore} disabled={history.loading}>
+            {history.loading ? 'Loading…' : 'Load older history'}
           </Button>
         </div>
       )}

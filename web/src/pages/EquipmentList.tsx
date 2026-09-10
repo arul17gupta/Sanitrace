@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ApiError, api } from '@/api/client';
+import { useCallback, useState } from 'react';
+import { api } from '@/api/client';
 import type { Equipment, EquipmentStatus } from '@/api/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { usePaginatedList } from '@/hooks/usePaginatedList';
 
 interface Props {
   onSelect: (equipment: Equipment) => void;
@@ -31,35 +32,20 @@ const ALL = 'all';
 const STATUS_LABELS = { [ALL]: 'All', active: 'Active', retired: 'Retired' };
 
 export function EquipmentList({ onSelect }: Props): JSX.Element {
-  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  /**
+   * The only state this screen owns. Everything else about the list -- the
+   * rows, the cursor, loading and error -- belongs to usePaginatedList.
+   */
   const [status, setStatus] = useState<EquipmentStatus | typeof ALL>(ALL);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (from: string | null, filter: EquipmentStatus | typeof ALL) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const page = await api.listEquipment({
-        ...(filter === ALL ? {} : { status: filter }),
-        cursor: from,
-        limit: 20,
-      });
-      setEquipment((existing) => (from === null ? page.data : [...existing, ...page.data]));
-      setCursor(page.nextCursor);
-      setHasMore(page.hasMore);
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not load equipment');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Keyed on the filter: change it and the hook re-reads from the first page.
+  const loadPage = useCallback(
+    (cursor: string | null) =>
+      api.listEquipment({ ...(status === ALL ? {} : { status }), cursor, limit: 20 }),
+    [status],
+  );
 
-  useEffect(() => {
-    void load(null, status);
-  }, [load, status]);
+  const list = usePaginatedList(loadPage, 'Could not load equipment');
 
   return (
     <section className="grid gap-4">
@@ -86,9 +72,9 @@ export function EquipmentList({ onSelect }: Props): JSX.Element {
         </div>
       </div>
 
-      {error !== null && (
+      {list.error !== null && (
         <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {error}
+          {list.error}
         </p>
       )}
 
@@ -103,7 +89,7 @@ export function EquipmentList({ onSelect }: Props): JSX.Element {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {equipment.map((item) => (
+            {list.items.map((item) => (
               <TableRow key={item.id}>
                 <TableCell className="font-mono text-xs">{item.code}</TableCell>
                 <TableCell className="font-medium">{item.name}</TableCell>
@@ -119,7 +105,7 @@ export function EquipmentList({ onSelect }: Props): JSX.Element {
                 </TableCell>
               </TableRow>
             ))}
-            {equipment.length === 0 && !loading && (
+            {list.items.length === 0 && !list.loading && (
               <TableRow>
                 <TableCell colSpan={4} className="text-center text-muted-foreground">
                   No equipment matches this filter.
@@ -130,10 +116,10 @@ export function EquipmentList({ onSelect }: Props): JSX.Element {
         </Table>
       </div>
 
-      {hasMore && (
+      {list.hasMore && (
         <div>
-          <Button variant="outline" onClick={() => void load(cursor, status)} disabled={loading}>
-            {loading ? 'Loading…' : 'Load more equipment'}
+          <Button variant="outline" onClick={list.loadMore} disabled={list.loading}>
+            {list.loading ? 'Loading…' : 'Load more equipment'}
           </Button>
         </div>
       )}

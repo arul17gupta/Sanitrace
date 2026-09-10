@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ArrowLeftIcon } from 'lucide-react';
-import { ApiError, api } from '@/api/client';
+import { api } from '@/api/client';
 import type { CleaningMethod, CleaningRecord, CleaningStatus, Equipment, User } from '@/api/types';
 import { AuditTrail } from '@/components/AuditTrail';
 import { CleaningRecordForm } from '@/components/CleaningRecordForm';
@@ -23,6 +23,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatTimestamp, orDash } from '@/format';
+import { usePaginatedList } from '@/hooks/usePaginatedList';
 
 interface Props {
   equipment: Equipment;
@@ -39,46 +40,33 @@ const ALL = 'all';
 const STATUS_LABELS = { [ALL]: 'All', pending: 'Pending', verified: 'Verified' };
 
 export function EquipmentDetail({ equipment, users, methods, onBack }: Props): JSX.Element {
-  const [records, setRecords] = useState<CleaningRecord[]>([]);
+  /**
+   * Three pieces of state, each a genuinely different thing: which rows the
+   * user wants to see, whether the form is open and in which mode, and which
+   * record's history is expanded. The list itself -- rows, cursor, loading,
+   * error -- lives in usePaginatedList.
+   */
   const [status, setStatus] = useState<CleaningStatus | typeof ALL>(ALL);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>({ mode: 'closed' });
   const [auditFor, setAuditFor] = useState<string | null>(null);
 
-  const load = useCallback(
-    async (from: string | null, filter: CleaningStatus | typeof ALL) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const page = await api.listRecords(equipment.id, {
-          ...(filter === ALL ? {} : { status: filter }),
-          cursor: from,
-          limit: 10,
-        });
-        setRecords((existing) => (from === null ? page.data : [...existing, ...page.data]));
-        setCursor(page.nextCursor);
-        setHasMore(page.hasMore);
-      } catch (caught) {
-        setError(caught instanceof ApiError ? caught.message : 'Could not load cleaning records');
-      } finally {
-        setLoading(false);
-      }
-    },
-    [equipment.id],
+  const loadPage = useCallback(
+    (cursor: string | null) =>
+      api.listRecords(equipment.id, {
+        ...(status === ALL ? {} : { status }),
+        cursor,
+        limit: 10,
+      }),
+    [equipment.id, status],
   );
 
-  useEffect(() => {
-    void load(null, status);
-  }, [load, status]);
+  const records = usePaginatedList(loadPage, 'Could not load cleaning records');
 
   const handleSaved = (): void => {
     setForm({ mode: 'closed' });
     // Re-read from the first page: an amendment can change the record's status
     // and its position is fixed by cleanedAt, so a local patch would be a guess.
-    void load(null, status);
+    records.reload();
   };
 
   return (
@@ -151,9 +139,9 @@ export function EquipmentDetail({ equipment, users, methods, onBack }: Props): J
         />
       )}
 
-      {error !== null && (
+      {records.error !== null && (
         <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {error}
+          {records.error}
         </p>
       )}
 
@@ -171,7 +159,7 @@ export function EquipmentDetail({ equipment, users, methods, onBack }: Props): J
             </TableRow>
           </TableHeader>
           <TableBody>
-            {records.map((record) => (
+            {records.items.map((record) => (
               <TableRow key={record.id}>
                 <TableCell className="whitespace-nowrap">
                   {formatTimestamp(record.cleanedAt)}
@@ -205,7 +193,7 @@ export function EquipmentDetail({ equipment, users, methods, onBack }: Props): J
                 </TableCell>
               </TableRow>
             ))}
-            {records.length === 0 && !loading && (
+            {records.items.length === 0 && !records.loading && (
               <TableRow>
                 <TableCell colSpan={7} className="text-center text-muted-foreground">
                   No cleaning records for this filter.
@@ -216,10 +204,10 @@ export function EquipmentDetail({ equipment, users, methods, onBack }: Props): J
         </Table>
       </div>
 
-      {hasMore && (
+      {records.hasMore && (
         <div>
-          <Button variant="outline" onClick={() => void load(cursor, status)} disabled={loading}>
-            {loading ? 'Loading…' : 'Load more'}
+          <Button variant="outline" onClick={records.loadMore} disabled={records.loading}>
+            {records.loading ? 'Loading…' : 'Load more'}
           </Button>
         </div>
       )}

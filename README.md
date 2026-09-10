@@ -241,6 +241,7 @@ api/src/errors.ts             one response shape; Postgres and body-parser
 
 web/src/api/http.ts           transport: base URL, X-User-Id, ApiError, get/post/patch
 web/src/api/client.ts         every call the app makes, one line each
+web/src/hooks/usePaginatedList.ts   the load-more list state, written once
 web/src/records/patch.ts      works out what a form submission changed — pure
 web/src/components/AuditTrail.tsx        old → new, grouped by edit
 web/src/components/CleaningRecordForm.tsx
