@@ -24,6 +24,12 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { isoToLocalInput, localInputToIso } from '@/format';
+import {
+  buildRecordPatch,
+  isSubstantive,
+  type RecordFormShape,
+  type RecordPatch,
+} from '@/records/patch';
 
 interface Props {
   equipmentId: string;
@@ -34,9 +40,6 @@ interface Props {
   onSaved: (record: CleaningRecord) => void;
   onCancel: () => void;
 }
-
-/** Fields whose change withdraws an existing verification (mirrors the API). */
-const SUBSTANTIVE = ['cleanedBy', 'cleanedAt', 'methodId'] as const;
 
 const userLabel = (user: User): string => `${user.name} — ${user.role}`;
 const methodLabel = (method: CleaningMethod): string =>
@@ -104,25 +107,11 @@ export function CleaningRecordForm({
     methods.map((method) => [method.id, methodLabel(method)]),
   );
 
-  /**
-   * Only the fields that actually changed are sent.
-   *
-   * This is what makes a one-field edit produce a one-entry audit trail: the
-   * API ignores keys it was not given, so sending the whole form back would
-   * still be correct but would tell the reader less.
-   */
-  function buildPatch(input: RecordFormValues): Record<string, unknown> {
+  // Delegates to a pure module so the rule can be tested without
+  // rendering: see records/patch.ts and its tests.
+  function buildPatch(input: RecordFormValues): RecordPatch {
     if (record === undefined) return {};
-    const changed: Record<string, unknown> = {};
-    if (input.cleanedBy !== record.cleanedBy) changed.cleanedBy = input.cleanedBy;
-    if (localInputToIso(input.cleanedAt) !== record.cleanedAt) {
-      changed.cleanedAt = localInputToIso(input.cleanedAt);
-    }
-    if (input.methodId !== record.methodId) changed.methodId = input.methodId;
-    const nextNotes = input.notes.trim() === '' ? null : input.notes.trim();
-    if (nextNotes !== record.notes) changed.notes = nextNotes;
-    if (input.status !== record.status) changed.status = input.status;
-    return changed;
+    return buildRecordPatch(record, input satisfies RecordFormShape);
   }
 
   const pendingPatch = buildPatch(values);
@@ -131,7 +120,7 @@ export function CleaningRecordForm({
     isEdit &&
     record.status === 'verified' &&
     values.status !== 'pending' &&
-    SUBSTANTIVE.some((field) => field in pendingPatch);
+    isSubstantive(pendingPatch);
 
   const reasonRequired = isEdit && record.status === 'verified' && values.status === 'pending';
 
