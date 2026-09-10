@@ -53,14 +53,33 @@ export function App(): JSX.Element {
 
   return (
     <div className="min-h-svh bg-background text-foreground">
-      <header className="border-b">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-end justify-between gap-4 px-6 py-5">
-          <div>
-            <h1 className="font-heading text-xl font-semibold tracking-tight">Sanitrace</h1>
-            <p className="text-sm text-muted-foreground">
-              Equipment cleaning log with a full audit trail
-            </p>
+      <header className="border-b bg-card">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-4">
+          <div className="flex flex-wrap items-center gap-4">
+            {/* Intrinsic size is given so the row does not jump while the image
+                loads. The asset is trimmed to the mark with a transparent
+                background, so it sits on the header colour rather than in a
+                white box of its own. */}
+            <img
+              src="/leucine-logo.png"
+              alt="Leucine"
+              width={373}
+              height={72}
+              className="h-7 w-auto"
+            />
+
+            <span aria-hidden="true" className="hidden h-8 w-px bg-border sm:block" />
+
+            <div>
+              <h1 className="font-heading text-lg leading-tight font-semibold tracking-tight">
+                Sanitrace
+              </h1>
+              <p className="text-xs text-muted-foreground">
+                Equipment cleaning log with a full audit trail
+              </p>
+            </div>
           </div>
+
           {users.length > 0 && (
             <UserPicker users={users} currentUserId={actorId} onChange={handleActorChange} />
           )}
