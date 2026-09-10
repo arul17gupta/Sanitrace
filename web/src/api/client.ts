@@ -1,3 +1,4 @@
+import { del, get, patch, post, url } from './http';
 import type {
   AuditChangeSet,
   CleaningMethod,
@@ -10,120 +11,118 @@ import type {
   User,
 } from './types';
 
-const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:4000';
-
 /**
- * The acting user, sent as X-User-Id on every request.
+ * Every call this front-end makes, in one place.
  *
- * Module state rather than context because there is exactly one acting user per
- * browser tab and every request needs it -- threading it through each call site
- * would add noise without adding safety. This is the seam that a real session
- * or token would replace.
+ * Each function is a single expression: a verb, an address, and the type that
+ * comes back. The plumbing -- base URL, the `X-User-Id` header, turning a
+ * failure into an `ApiError` -- lives in http.ts, so there is nothing to read
+ * here except the shape of the API itself.
+ *
+ * | function                | call                                          | returns              |
+ * |-------------------------|-----------------------------------------------|----------------------|
+ * | `listUsers`             | `GET  /api/users`                             | `User[]`             |
+ * | `listMethods`           | `GET  /api/cleaning-methods`                  | `CleaningMethod[]`   |
+ * | `listEquipment`         | `GET  /api/equipment`                         | `Page<Equipment>`    |
+ * | `getEquipment`          | `GET  /api/equipment/:id`                     | `Equipment`          |
+ * | `createEquipment`       | `POST /api/equipment`                         | `Equipment`          |
+ * | `updateEquipment`       | `PATCH /api/equipment/:id`                    | `Equipment`          |
+ * | `retireEquipment`       | `DELETE /api/equipment/:id`                   | `Equipment`          |
+ * | `listRecords`           | `GET  /api/equipment/:id/cleaning-records`    | `Page<CleaningRecord>` |
+ * | `createRecord`          | `POST /api/equipment/:id/cleaning-records`    | `CleaningRecord`     |
+ * | `updateRecord`          | `PATCH /api/cleaning-records/:id`             | `CleaningRecord`     |
+ * | `listAudit`             | `GET  /api/cleaning-records/:id/audit`        | `Page<AuditChangeSet>` |
+ *
+ * Two response shapes, and the return types say which is which:
+ *
+ * - **Paginated** endpoints answer `{ data, nextCursor, hasMore }`, typed as
+ *   `Page<T>`. The caller keeps the cursor to ask for the next page.
+ * - **Reference lists** (users, methods) are short closed sets with no cursor.
+ *   The API still wraps them in `{ data }` for consistency; these functions
+ *   unwrap it, because a caller that can never paginate should not have to
+ *   reach through an envelope.
  */
-let currentUserId: string | null = null;
 
-export function setCurrentUserId(id: string | null): void {
-  currentUserId = id;
+/** Filters and paging shared by the two paginated list endpoints. */
+export interface PageQuery {
+  cursor?: string | null;
+  limit?: number;
 }
 
-/** Mirrors the API's single error shape so callers can react to a `code`. */
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-    readonly details?: Record<string, string[] | undefined>,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-
-  /** The first validation message for a field, if the API reported one. */
-  fieldError(field: string): string | undefined {
-    return this.details?.[field]?.[0];
-  }
+export interface EquipmentQuery extends PageQuery {
+  status?: EquipmentStatus;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body !== undefined) headers.set('Content-Type', 'application/json');
-  if (currentUserId !== null) headers.set('X-User-Id', currentUserId);
-
-  const response = await fetch(`${BASE_URL}${path}`, { ...init, headers });
-
-  if (response.status === 204) return undefined as T;
-
-  const payload: unknown = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const error = (payload as { error?: { code?: string; message?: string; details?: unknown } })
-      ?.error;
-    throw new ApiError(
-      response.status,
-      error?.code ?? 'UNKNOWN',
-      error?.message ?? `Request failed with ${response.status}`,
-      error?.details as Record<string, string[] | undefined> | undefined,
-    );
-  }
-
-  return payload as T;
+export interface RecordQuery extends PageQuery {
+  status?: CleaningStatus;
 }
 
-const params = (entries: Record<string, string | number | null | undefined>): string => {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(entries)) {
-    if (value !== null && value !== undefined && value !== '') search.set(key, String(value));
-  }
-  const query = search.toString();
-  return query === '' ? '' : `?${query}`;
+/** The fields a PATCH may carry, beyond the record's own values. */
+export type RecordPatchBody = Partial<RecordDraft> & {
+  status?: CleaningStatus;
+  reason?: string;
 };
 
 export const api = {
-  listUsers: () => request<{ data: User[] }>('/api/users').then((r) => r.data),
+  // --- reference data, for the form's dropdowns -------------------------------
 
-  listMethods: () => request<{ data: CleaningMethod[] }>('/api/cleaning-methods').then((r) => r.data),
+  /** `GET /api/users` */
+  listUsers: (): Promise<User[]> =>
+    get<{ data: User[] }>('/api/users').then((body) => body.data),
 
-  listEquipment: (options: { status?: EquipmentStatus; cursor?: string | null; limit?: number }) =>
-    request<Page<Equipment>>(
-      `/api/equipment${params({
-        status: options.status,
-        cursor: options.cursor,
-        limit: options.limit,
-      })}`,
-    ),
+  /** `GET /api/cleaning-methods` — active procedures only */
+  listMethods: (): Promise<CleaningMethod[]> =>
+    get<{ data: CleaningMethod[] }>('/api/cleaning-methods').then((body) => body.data),
 
-  listRecords: (
+  // --- equipment -------------------------------------------------------------
+
+  /** `GET /api/equipment` */
+  listEquipment: (query: EquipmentQuery = {}): Promise<Page<Equipment>> =>
+    get(url('/api/equipment', { ...query })),
+
+  /** `GET /api/equipment/:id` */
+  getEquipment: (equipmentId: string): Promise<Equipment> =>
+    get(`/api/equipment/${equipmentId}`),
+
+  /** `POST /api/equipment` */
+  createEquipment: (input: { name: string; code: string }): Promise<Equipment> =>
+    post('/api/equipment', input),
+
+  /** `PATCH /api/equipment/:id` */
+  updateEquipment: (
     equipmentId: string,
-    options: { status?: CleaningStatus; cursor?: string | null; limit?: number },
-  ) =>
-    request<Page<CleaningRecord>>(
-      `/api/equipment/${equipmentId}/cleaning-records${params({
-        status: options.status,
-        cursor: options.cursor,
-        limit: options.limit,
-      })}`,
-    ),
+    input: { name?: string; code?: string; status?: EquipmentStatus },
+  ): Promise<Equipment> => patch(`/api/equipment/${equipmentId}`, input),
 
-  createRecord: (equipmentId: string, draft: RecordDraft) =>
-    request<CleaningRecord>(`/api/equipment/${equipmentId}/cleaning-records`, {
-      method: 'POST',
-      body: JSON.stringify(draft),
-    }),
+  /** `DELETE /api/equipment/:id` — retires it; the row is never removed */
+  retireEquipment: (equipmentId: string): Promise<Equipment> =>
+    del(`/api/equipment/${equipmentId}`),
 
-  updateRecord: (
-    recordId: string,
-    patch: Partial<RecordDraft> & { status?: CleaningStatus; reason?: string },
-  ) =>
-    request<CleaningRecord>(`/api/cleaning-records/${recordId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(patch),
-    }),
+  // --- cleaning records ------------------------------------------------------
 
-  listAudit: (recordId: string, options: { cursor?: string | null; limit?: number } = {}) =>
-    request<Page<AuditChangeSet>>(
-      `/api/cleaning-records/${recordId}/audit${params({
-        cursor: options.cursor,
-        limit: options.limit,
-      })}`,
-    ),
+  /** `GET /api/equipment/:id/cleaning-records` — newest cleaning first */
+  listRecords: (equipmentId: string, query: RecordQuery = {}): Promise<Page<CleaningRecord>> =>
+    get(url(`/api/equipment/${equipmentId}/cleaning-records`, { ...query })),
+
+  /** `POST /api/equipment/:id/cleaning-records` — always created `pending` */
+  createRecord: (equipmentId: string, draft: RecordDraft): Promise<CleaningRecord> =>
+    post(`/api/equipment/${equipmentId}/cleaning-records`, draft),
+
+  /**
+   * `PATCH /api/cleaning-records/:id`
+   *
+   * Send only the fields that changed. The API audits exactly what it is
+   * given, so anything included here appears in the record's audit trail --
+   * see records/patch.ts, which works out the minimal body.
+   */
+  updateRecord: (recordId: string, body: RecordPatchBody): Promise<CleaningRecord> =>
+    patch(`/api/cleaning-records/${recordId}`, body),
+
+  /** `GET /api/cleaning-records/:id/audit` — newest edit first */
+  listAudit: (recordId: string, query: PageQuery = {}): Promise<Page<AuditChangeSet>> =>
+    get(url(`/api/cleaning-records/${recordId}/audit`, { ...query })),
 };
+
+// Re-exported so a component imports one module: the calls it makes and the
+// error type it catches.
+export { ApiError, getCurrentUserId, setCurrentUserId } from './http';
