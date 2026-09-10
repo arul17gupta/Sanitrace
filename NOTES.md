@@ -219,6 +219,83 @@ tested without a database anywhere in sight.
 The record write and its audit rows always commit together, through
 `withTransaction`. A record cannot exist without the trail that explains it.
 
+## Defects I found by probing the edges, and fixed
+
+Running the happy paths was not enough. Six of these came out of deliberately
+poking at boundaries, and each one is now covered by a test.
+
+**1. A cursor from one collection used on another returned a 500.** Every cursor
+is a pair of strings, so an equipment cursor — whose leading sort value is an
+asset tag — decoded cleanly against the cleaning log. The query then cast it
+(`$3::timestamptz`) and Postgres raised, surfacing as a server error for what is
+really a bad request. `decodeCursor` now takes the kind of column it will be
+compared against and rejects anything that cannot survive the cast.
+
+**2. `Date.parse` is useless for validating a timestamp.** My first fix for (1)
+checked `Number.isNaN(Date.parse(sortValue))` — and it did not work, because
+**`Date.parse('MT-003')` returns a real timestamp**: V8's fallback parser reads
+`003` as a year. An asset tag sailed straight through. The check is now a strict
+ISO-8601 pattern, and there is a test asserting the leniency exists so nobody
+"simplifies" it back.
+
+**3. The not-in-the-future check made older records un-amendable.** The CHECK
+constraint compared `cleaned_at` against `created_at`, which is frozen at
+insert. So a record written last week could never have its cleaning time
+corrected to yesterday — a core use case for an amendment log — and it failed as
+a 500 from a constraint violation. It now compares against `updated_at`, which
+is rewritten on every write, so the invariant is "not in the future *as of when
+the row was last written*", which is the rule actually intended.
+
+**4. Malformed JSON and oversized bodies returned 500.** `express.json` throws
+its own errors, and nothing recognised them. Now 400 `MALFORMED_JSON` and 413
+`PAYLOAD_TOO_LARGE`.
+
+**5. Object-level validation messages were swallowed.** `flatten().fieldErrors`
+only carries failures that belong to a field; an object-level `.refine` — such
+as "provide at least one field to update" — lands in `formErrors`, which was
+discarded. A caller got `details: {}` and no explanation. Both are reported now.
+
+**6. A duplicate asset tag leaked the constraint name.** The response said
+`equipment_code_key`, which is an implementation detail. Known unique
+constraints are mapped back to a field name, so the message reads "That code is
+already in use" and `details.code` lets a form show it inline. Foreign-key and
+check violations are translated too, rather than falling through to a 500.
+
+## Known deviations from a literal reading of the brief
+
+Flagging these because a strict reading of the spec would notice them, and each
+is a decision rather than an oversight.
+
+**"Every time a cleaning record is created or updated, persist an audit entry."**
+An edit that changes no value writes nothing at all. Taken literally, a PATCH
+with an identical body should still produce an entry; I judged a trail full of
+rows reporting no change to be worse than useless, since it buries the real
+changes. Tested explicitly.
+
+**`method` became a foreign key.** The brief lists `method` as a field on the
+record. It is `method_id` referencing `cleaning_methods`, and the API exposes
+`methodId`, `methodCode` and `methodName`. The audit trail still records the
+field as `method` with the SOP code as its value, which is what a reader wants.
+
+**"CRUD for equipment"** — the D is a soft retire. `DELETE /equipment/:id` sets
+`status = 'retired'` and returns the row. Nothing in this API removes a record,
+because cleaning history has to outlive the machine.
+
+**Writes require `X-User-Id`.** Auth was only a stretch goal, so a reviewer
+trying `POST` with no header gets a 401. That is deliberate — an audit entry
+attributed to nobody is worthless — and the README shows the header on every
+write example.
+
+**An unknown user id is rejected on reads too**, not just writes. Failing fast on
+a bad identity seemed better than silently serving data to a caller whose
+identity we could not resolve.
+
+**Keyset pagination gives no total count and no page numbers.** That is inherent
+to the approach, and it is why the UI is a "Load more" button rather than a
+pager. If a page count were genuinely needed I would add an opt-in
+`?count=true`, but adding an unconditional `COUNT(*)` would give back exactly
+the cost the cursor exists to avoid.
+
 ## Things I deliberately did not build
 
 - **Real authentication.** The acting user comes from an `X-User-Id` header,

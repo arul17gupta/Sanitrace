@@ -111,8 +111,10 @@ users is also how you exercise the four-eyes rule — see below.
 npm test
 ```
 
-39 unit tests run with no database. The integration suite needs Postgres running;
-it creates and resets `sanitrace_test` itself, and never touches `sanitrace`.
+**88 tests.** 56 of them run with no database at all (the audit diff, the status
+rules, the cursors, and the front-end's patch builder). The 32 integration tests
+need Postgres running; they create and reset `sanitrace_test` themselves and
+never touch `sanitrace`.
 
 ```bash
 npm run test:api    # unit + integration
@@ -172,9 +174,24 @@ Errors, always in one shape:
 { "error": { "code": "REASON_REQUIRED", "message": "...", "details": {} } }
 ```
 
-`INVALID_CURSOR`, `VALIDATION_FAILED`, `USER_REQUIRED`, `NOT_FOUND`,
-`DUPLICATE_VALUE`, `EQUIPMENT_RETIRED`, `METHOD_INACTIVE`,
-`SELF_VERIFICATION_FORBIDDEN`, `REASON_REQUIRED`, `AUDIT_TRAIL_IMMUTABLE`.
+| Code | Status | |
+|---|---|---|
+| `VALIDATION_FAILED` | 400 | body or query failed schema validation; `details` is keyed by field, with object-level failures under `_form` |
+| `MALFORMED_JSON` | 400 | body is not valid JSON |
+| `INVALID_CURSOR` | 400 | cursor is unreadable, forged, or belongs to another collection |
+| `INVALID_PARAMETER` | 400 | a parameter could not be used by the query |
+| `CONSTRAINT_VIOLATION` | 400 | a database rule rejected the value |
+| `REASON_REQUIRED` | 400 | withdrawing a verification needs a reason |
+| `USER_REQUIRED` | 401 | a write arrived with no `X-User-Id` |
+| `UNKNOWN_USER` | 401 | `X-User-Id` does not match a user |
+| `NOT_FOUND` | 404 | |
+| `DUPLICATE_VALUE` | 409 | unique constraint; `details` names the field |
+| `REFERENCE_MISSING` | 409 | a referenced row disappeared mid-write |
+| `EQUIPMENT_RETIRED` | 409 | cannot log against retired equipment |
+| `METHOD_INACTIVE` | 409 | the procedure is superseded |
+| `SELF_VERIFICATION_FORBIDDEN` | 409 | four-eyes rule |
+| `AUDIT_TRAIL_IMMUTABLE` | 409 | something tried to rewrite history |
+| `PAYLOAD_TOO_LARGE` | 413 | body over 64 kB |
 
 ### By hand
 
@@ -188,6 +205,14 @@ curl "http://localhost:4000/api/equipment?status=active"
 
 ```bash
 curl "http://localhost:4000/api/equipment/<equipment-id>/cleaning-records?limit=5"
+```
+
+Writes need the `X-User-Id` header — every change to an audited record has to be
+attributable, so a write without one is refused with `USER_REQUIRED` rather than
+being recorded against nobody. Take an id from `/api/users`.
+
+```bash
+curl -X POST "http://localhost:4000/api/equipment/<equipment-id>/cleaning-records" -H "Content-Type: application/json" -H "X-User-Id: <user-id>" -d '{"cleanedBy":"<user-id>","cleanedAt":"2026-09-10T09:00:00Z","methodId":"<method-id>","notes":"Visual inspection passed."}'
 ```
 
 ```bash
@@ -211,7 +236,12 @@ api/src/services/            transaction orchestration
 api/src/repos/               SQL
 api/src/routes/              HTTP and validation
 
+api/src/errors.ts             one response shape; Postgres and body-parser
+                              failures translated here rather than leaking 500s
+
+web/src/records/patch.ts      works out what a form submission changed — pure
 web/src/components/AuditTrail.tsx        old → new, grouped by edit
 web/src/components/CleaningRecordForm.tsx
+web/src/components/ui/                   shadcn components (generated, except form.tsx)
 web/src/pages/                           the two screens
 ```
